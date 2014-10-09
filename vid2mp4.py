@@ -8,10 +8,12 @@ import stat
 import toolbox.ansi as ansi
 
 # control globals
-EXT_TO_CHECK = ["mp4", "avi", "mkv"]
+EXT_TO_CHECK = ["mp4", "avi", "mkv", "mpg", "mpeg"]
 ALLOWED_EXT = ["avi", "mp4"]
 ALLOWED_VCODECS = ["h264"]
 ALLOWED_ACODECS = ["aac", "mp3"]
+HOPELESS_VCODECS = []
+HOPELESS_ACODECS = ["adpcm_dtk"]
 TARGET_EXT = "mp4"
 TARGET_VCODEC = "h264"
 TARGET_ACODEC = "aac -strict -2 -ar 48000 -ac 2 -b:a 400k"
@@ -54,8 +56,30 @@ def codecStat(f):
 
     return rval
 
+def isChromecastPlayable(file, codecs=None):
+    if codecs is None:
+        codecs = codecStat(file)
+
+    try:
+        if codecs["ext"] in ALLOWED_EXT and codecs["vcodec"] in ALLOWED_VCODECS and codecs["acodec"] in ALLOWED_ACODECS:
+            return True
+    except KeyError:
+        return False
+    return False
+
+def isConformable(file, codecs=None):
+    if codecs is None:
+        codecs = codecStat(file)
+
+    try:
+        if codecs["vcodec"] in HOPELESS_VCODECS or codecs["acodec"] in HOPELESS_ACODECS:
+            return False
+    except KeyError:
+        return False
+    return True
+
 def conformFile(source):
-    # print "conformFile", source, cstat
+    # print "conformFile", source
 
     # short circuit if we don't need to scan the codec
     ext = os.path.splitext(source)[1].lstrip(".").lower()
@@ -64,8 +88,12 @@ def conformFile(source):
 
     c = codecStat(source)
     # print c
-    if c["ext"] in ALLOWED_EXT and c["vcodec"] in ALLOWED_VCODECS and c["acodec"] in ALLOWED_ACODECS:
+    if isChromecastPlayable(source, c):
         # print "file OK"
+        return
+    if not isConformable(source, c):
+        print "Warning:"
+        printFileStats(source)
         return
 
     dest =  os.path.splitext(source)[0] + "." + TARGET_EXT
@@ -77,17 +105,24 @@ def conformFile(source):
     # build the conform command
     cmd = "ffmpeg -loglevel error -y -i \"%s\" " % (source)
 
-    if c["vcodec"] in ALLOWED_VCODECS:
-        cmd += "-vcodec copy "
-    else:
+    try:
+        if c["vcodec"] in ALLOWED_VCODECS:
+            cmd += "-vcodec copy "
+        else:
+            raise KeyError
+    except KeyError:
         cmd += "-vcodec %s " % (TARGET_VCODEC)
 
-    if c["acodec"] in CHROMECAST_ACODECS:
-        cmd += "-acodec copy "
-    else:
+    try:
+        if c["acodec"] in CHROMECAST_ACODECS:
+            cmd += "-acodec copy "
+        else:
+            raise KeyError
+    except KeyError:
         cmd += "-acodec %s " % (TARGET_ACODEC)
 
     cmd += "\"%s\"" % (dest)
+    # print cmd
 
     # run the command as necessary
     if DRYRUN:
@@ -121,10 +156,11 @@ def printFileStats(source):
     except ProbeException:
         return
 
-    if c["ext"] not in ALLOWED_EXT or c["vcodec"] not in ALLOWED_VCODECS or c["acodec"] not in ALLOWED_ACODECS:
+    codec = str(c)
+    if not isChromecastPlayable(source, c):
         codec = ansi.red(str(c))
-    else:
-        codec = str(c)
+    if not isConformable(source, c):
+        codec = "*!* " + codec
     print codec, source
 
 def spiderFolders(f):
@@ -156,6 +192,7 @@ def main():
     p.add_option("--debug", dest="debug", action="store_true", default=False, help=optparse.SUPPRESS_HELP)
     p.add_option("--dryrun", dest="dryrun", action="store_true", default=False, help="print what will be done instead of doing it")
     p.add_option("--codecs", dest="codecs", action="store_true", default=False, help="list the codec of all files")
+    p.add_option("--queue", dest="queue", action="store_true", default=False, help="allow for the queueing and later processing of files")
     (opts, args) = p.parse_args()
 
     global DRYRUN
